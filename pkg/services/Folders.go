@@ -10,6 +10,9 @@ import (
 )
 
 type FolderServicer interface {
+	/*
+	 * Delete a folder by its full path.
+	 */
 	Delete(folder *models.Folder) error
 
 	/*
@@ -42,16 +45,14 @@ func (s FolderService) Delete(folder *models.Folder) error {
 	sql := `
 DELETE FROM folders
 WHERE 1=1
-	AND folder_name=?
-	AND parent_path=?
+	AND full_path=?
 	`
 
 	ctx, cancel := DBContext()
 	defer cancel()
 
 	args := []any{
-		folder.FolderName,
-		folder.ParentPath,
+		folder.FullPath,
 	}
 
 	if _, err = s.db.Exec(ctx, sql, args...); err != nil {

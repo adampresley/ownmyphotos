@@ -1,7 +1,9 @@
 package collector
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -105,40 +107,58 @@ func (c *JpegCollector) Run(settingsService services.SettingsServicer) ([]error,
 }
 
 func (c *JpegCollector) cleanRemovedPhotos(settings *models.Settings, allPhotos []*models.Photo) []error {
-	return []error{}
-	// var (
-	// 	err  error
-	// 	errs []error
-	// )
-	//
-	// for _, photo := range allPhotos {
-	// 	fullPath := services.GetPhotoPath(settings.LibraryPath, photo.FilePath, photo.FileName, photo.Ext)
-	// 	if _, err = os.Stat(fullPath); errors.Is(err, os.ErrNotExist) {
-	// 		errs = append(errs, fmt.Errorf("photo '%s' not found in library at '%s'", photo.FileName, fullPath))
-	// 		continue
-	// 	}
-	//
-	// 	/*
-	// 	 * Delete the photo from the database and cache.
-	// 	 */
-	// 	if err = c.photoService.Delete(photo.ID); err != nil {
-	// 		errs = append(errs, fmt.Errorf("could not delete photo '%s': %w", photo.FileName, err))
-	// 		continue
-	// 	}
-	//
-	// 	if err = c.photoCache.Remove(settings, photo); err != nil {
-	// 		errs = append(errs, fmt.Errorf("could not remove photo '%s' from cache: %w", photo.FileName, err))
-	// 		continue
-	// 	}
-	// }
-	//
-	// return errs
+	var (
+		err  error
+		errs []error
+	)
+
+	for _, photo := range allPhotos {
+		fullPath := photo.GetFullPath()
+
+		if _, err = os.Stat(fullPath); errors.Is(err, os.ErrNotExist) {
+			cacheDir := services.GetThumbnailCacheDir(
+				settings.LibraryPath,
+				c.cachePath,
+				photo.GetAlbumPath(settings.LibraryPath),
+			)
+
+			cachePath := services.GetThumbnailCachePath(
+				settings.LibraryPath,
+				c.cachePath,
+				photo.GetAlbumPath(settings.LibraryPath),
+				photo.FileName,
+				photo.Ext,
+			)
+
+			slog.Info("removing photo", "id", photo.ID, "fullPath", fullPath, "cachePath", cachePath)
+
+			if err = c.photoService.Delete(photo.ID); err != nil {
+				errs = append(errs, fmt.Errorf("could not delete photo '%s': %w", photo.ID, err))
+				continue
+			}
+
+			if err = os.Remove(cachePath); err != nil {
+				errs = append(errs, fmt.Errorf("could not remove cache file '%s': %w", cachePath, err))
+				continue
+			}
+
+			// If the thumbnails directory is empty, remove it
+			if err = c.cleanEmptyCacheDirectories(settings.LibraryPath, cacheDir); err != nil {
+				errs = append(errs, fmt.Errorf("could not clean empty cache directories: %w", err))
+			}
+		}
+	}
+
+	return errs
 }
 
 func (c *JpegCollector) syncPhotos(settings *models.Settings, allPhotos []*models.Photo) []error {
 	var (
 		errs []error
 	)
+
+	pool := pond.NewResultPool[[]error](settings.MaxWorkers)
+	group := pool.NewGroup()
 
 	dirStack := datastructures.NewStack[*models.Folder]()
 
@@ -213,85 +233,169 @@ func (c *JpegCollector) syncPhotos(settings *models.Settings, allPhotos []*model
 			return nil
 		}
 
-		albumPath := strings.TrimPrefix(filepath.Dir(strings.TrimPrefix(path, settings.LibraryPath)), string(os.PathSeparator))
-		fileName := strings.TrimSuffix(filepath.Base(path), ext)
-		fullImagePath := services.GetPhotoPath(settings.LibraryPath, albumPath, fileName, ext)
-		fullCachePath := services.GetThumbnailCachePath(settings.LibraryPath, c.cachePath, albumPath, fileName, ext)
+		group.Submit(func() []error {
+			errs := []error{}
 
-		/*
-		 * Open the photo and extract metadata.
-		 */
-		if f, err = os.Open(fullImagePath); err != nil {
-			errs = append(errs, fmt.Errorf("could not open file '%s': %w", fullImagePath, err))
-			return nil
-		}
+			albumPath := strings.TrimPrefix(filepath.Dir(strings.TrimPrefix(path, settings.LibraryPath)), string(os.PathSeparator))
+			fileName := strings.TrimSuffix(filepath.Base(path), ext)
+			fullImagePath := services.GetPhotoPath(settings.LibraryPath, albumPath, fileName, ext)
+			fullCachePath := services.GetThumbnailCachePath(settings.LibraryPath, c.cachePath, albumPath, fileName, ext)
 
-		defer f.Close()
-
-		if imageData, err = imagemetadata.NewFromJPEG(f); err != nil {
-			errs = append(errs, fmt.Errorf("could not extract metadata from file '%s': %w", fullImagePath, err))
-			return nil
-		}
-
-		/*
-		 * Find an existing photo, if any, in the database. This will help
-		 * us determine if we need to create a new record, or update an existing one.
-		 */
-		existingPhoto := slices.Find(allPhotos, func(p *models.Photo) bool {
-			if p.FileName == fileName && p.Ext == ext {
-				return true
+			/*
+			 * Open the photo and extract metadata.
+			 */
+			if f, err = os.Open(fullImagePath); err != nil {
+				errs = append(errs, fmt.Errorf("could not open file '%s': %w", fullImagePath, err))
+				return errs
 			}
 
-			return false
+			defer f.Close()
+
+			if imageData, err = imagemetadata.NewFromJPEG(f); err != nil {
+				errs = append(errs, fmt.Errorf("could not extract metadata from file '%s': %w", fullImagePath, err))
+				return errs
+			}
+
+			/*
+			 * Find an existing photo, if any, in the database. This will help
+			 * us determine if we need to create a new record, or update an existing one.
+			 */
+			existingPhoto := slices.Find(allPhotos, func(p *models.Photo) bool {
+				if p.FileName == fileName && p.Ext == ext {
+					return true
+				}
+
+				return false
+			})
+
+			filePhoto := models.NewPhotoFromImageData(
+				fullImagePath,
+				imageData,
+			)
+
+			if fileID, err = c.photoService.GetFileID(fullImagePath); err != nil {
+				errs = append(errs, fmt.Errorf("could not get file ID for '%s': %w", fullImagePath, err))
+				return errs
+			}
+
+			if existingPhoto == nil {
+				existingPhoto = &models.Photo{}
+			}
+
+			if existingPhoto.ID != fileID || existingPhoto.MetadataHash != filePhoto.MetadataHash {
+				action := "creating"
+
+				if err = c.cacheCreator.CreateCacheFile(fullImagePath, fullCachePath); err != nil {
+					errs = append(errs, fmt.Errorf("could not create cache file for '%s': %w", fullImagePath, err))
+					return errs
+				}
+
+				// Determine what we should do with the photo: update or create
+				filePhoto.ID = fileID
+
+				if existingPhoto.ID == fileID {
+					filePhoto.CreatedAt = existingPhoto.CreatedAt
+					filePhoto.UpdatedAt = time.Now().UTC()
+					action = "updating"
+				}
+
+				slog.Info(action+" photo", "path", fullImagePath)
+
+				if err = c.photoService.Save(filePhoto); err != nil {
+					errs = append(errs, fmt.Errorf("could not save photo '%s': %w", fileName, err))
+					return errs
+				}
+			} else if !c.cacheCreator.DoesExist(fullCachePath) {
+				slog.Info("creating cache file for photo", "path", fullCachePath)
+				if err = c.cacheCreator.CreateCacheFile(fullImagePath, fullCachePath); err != nil {
+					errs = append(errs, fmt.Errorf("could not create cache file for '%s': %w", fullImagePath, err))
+					return errs
+				}
+			}
+
+			return []error{}
 		})
-
-		filePhoto := models.NewPhotoFromImageData(
-			fullImagePath,
-			imageData,
-		)
-
-		if fileID, err = c.photoService.GetFileID(fullImagePath); err != nil {
-			errs = append(errs, fmt.Errorf("could not get file ID for '%s': %w", fullImagePath, err))
-			return nil
-		}
-
-		if existingPhoto == nil {
-			existingPhoto = &models.Photo{}
-		}
-
-		if existingPhoto.ID != fileID || existingPhoto.MetadataHash != filePhoto.MetadataHash {
-			action := "creating"
-
-			if err = c.cacheCreator.CreateCacheFile(fullImagePath, fullCachePath); err != nil {
-				errs = append(errs, fmt.Errorf("could not create cache file for '%s': %w", fullImagePath, err))
-				return nil
-			}
-
-			// Determine what we should do with the photo: update or create
-			filePhoto.ID = fileID
-
-			if existingPhoto.ID == fileID {
-				filePhoto.CreatedAt = existingPhoto.CreatedAt
-				filePhoto.UpdatedAt = time.Now().UTC()
-				action = "updating"
-			}
-
-			slog.Info(action+" photo", "path", fullImagePath)
-
-			if err = c.photoService.Save(filePhoto); err != nil {
-				errs = append(errs, fmt.Errorf("could not save photo '%s': %w", fileName, err))
-				return nil
-			}
-		} else if !c.cacheCreator.DoesExist(fullCachePath) {
-			slog.Info("creating cache file for photo", "path", fullCachePath)
-			if err = c.cacheCreator.CreateCacheFile(fullImagePath, fullCachePath); err != nil {
-				errs = append(errs, fmt.Errorf("could not create cache file for '%s': %w", fullImagePath, err))
-				return nil
-			}
-		}
 
 		return nil
 	})
 
+	result, _ := group.Wait()
+
+	for _, groupErrors := range result {
+		errs = append(errs, groupErrors...)
+	}
+
 	return errs
+}
+
+// cleanEmptyCacheDirectories removes empty cache directories recursively
+// It starts with the thumbnails directory and works its way up to parent directories
+func (c *JpegCollector) cleanEmptyCacheDirectories(libraryPath, thumbnailsDir string) error {
+	slog.Info("cleaning empty cache directories", "path", thumbnailsDir)
+
+	// First check if the thumbnails directory exists
+	if _, err := os.Stat(thumbnailsDir); os.IsNotExist(err) {
+		return nil // Directory doesn't exist, nothing to clean
+	}
+
+	// Check if thumbnails directory is empty
+	isEmpty, err := isDirEmpty(thumbnailsDir)
+	if err != nil {
+		return fmt.Errorf("error checking if directory is empty: %w", err)
+	}
+
+	if !isEmpty {
+		return nil // Directory is not empty, don't remove it
+	}
+
+	// Remove the thumbnails directory
+	slog.Info("removing empty thumbnails directory", "path", thumbnailsDir)
+	if err := os.Remove(thumbnailsDir); err != nil {
+		return fmt.Errorf("error removing thumbnails directory: %w", err)
+	}
+
+	// Now check if the parent directory (Event) is empty
+	parentDir := filepath.Dir(thumbnailsDir)
+	isEmpty, err = isDirEmpty(parentDir)
+
+	if err != nil {
+		return fmt.Errorf("error checking if event directory is empty: %w", err)
+	}
+
+	if !isEmpty {
+		return nil // Event directory is not empty, don't remove it
+	}
+
+	// Remove the parent directory
+	slog.Info("removing empty parent directory", "path", parentDir)
+
+	fldr := &models.Folder{
+		FullPath: filepath.Join(libraryPath, strings.TrimPrefix(parentDir, c.cachePath)),
+	}
+
+	if err = c.folderService.Delete(fldr); err != nil {
+		return fmt.Errorf("error deleting folder in database: %w", err)
+	}
+
+	if err := os.Remove(parentDir); err != nil {
+		return fmt.Errorf("error removing event directory: %w", err)
+	}
+
+	return nil
+}
+
+// isDirEmpty checks if a directory is empty
+func isDirEmpty(dirPath string) (bool, error) {
+	f, err := os.Open(dirPath)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	// Read just one entry
+	_, err = f.Readdirnames(1)
+	if err == io.EOF {
+		return true, nil // Directory is empty
+	}
+	return false, err // Either not empty or error
 }

@@ -177,6 +177,10 @@ func (p *Photo) GetAlbumPath(libraryPath string) string {
 	return pathMinusLibrary
 }
 
+func (p *Photo) GetFullPath() string {
+	return filepath.Join(p.FullPath, p.FileName+p.Ext)
+}
+
 func determineCreationDateTime(dateTimeString string) time.Time {
 	result, err := time.Parse("2006-01-02T15:04:05", dateTimeString)
 
