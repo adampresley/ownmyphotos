@@ -5,3 +5,6 @@
 pusher.yaml
 tmp/
 cmd/ownmyphotos/data/*.db
+cache/
+!pkg/cache/
+!cache/.gitkeep

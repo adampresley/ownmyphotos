@@ -37,14 +37,14 @@ var (
 	config configuration.Config
 
 	/* Services */
-	db              *sqlz.DB
-	cacheCreator    cache.CacheCreator
-	folderService   services.FolderServicer
-	jpegCollector   collector.Collector
-	photoCache      services.PhotoCacher
-	photoService    services.PhotoServicer
-	renderer        rendering.TemplateRenderer
-	settingsService services.SettingsServicer
+	db               *sqlz.DB
+	folderService    services.FolderServicer
+	jpegCollector    collector.Collector
+	jpegCacheCreator cache.CacheCreator
+	photoCache       services.PhotoCacher
+	photoService     services.PhotoServicer
+	renderer         rendering.TemplateRenderer
+	settingsService  services.SettingsServicer
 
 	/* Controllers */
 	homeController     home.HomeHandlers
@@ -54,7 +54,8 @@ var (
 
 func main() {
 	var (
-		err error
+		err          error
+		userSettings *models.Settings
 	)
 
 	config = configuration.LoadConfig()
@@ -91,11 +92,10 @@ func main() {
 		DB: db,
 	})
 
-	cacheCreator = cache.NewCacheCreatorService(cache.CacheCreatorConfig{
-		SettingsService: settingsService,
-		CacheDirectory:  config.CacheDirectory,
-		MaxCacheWorkers: config.MaxCacheWorkers,
-	})
+	if userSettings, err = settingsService.Read(); err != nil {
+		slog.Error("error getting cache schedule from the database", "error", err)
+		return
+	}
 
 	photoCache = services.NewPhotoCache(services.PhotoCacheConfig{
 		CachePath: config.CacheDirectory,
@@ -109,8 +109,11 @@ func main() {
 		DB: db,
 	})
 
+	jpegCacheCreator = cache.NewJpegCacheCreator(uint(userSettings.ThumbnailSize))
+
 	jpegCollector, err = collector.NewJpegCollector(collector.JpegCollectorConfig{
 		CachePath:     config.CacheDirectory,
+		CacheCreator:  jpegCacheCreator,
 		FolderService: folderService,
 		PhotoCache:    photoCache,
 		PhotoService:  photoService,
@@ -175,7 +178,7 @@ func main() {
 	 * Setup cache creator
 	 */
 	// setupCacheCreator()
-	setupCollectors()
+	setupCollectors(userSettings)
 
 	/*
 	 * Start cron jobs
@@ -243,37 +246,13 @@ func isIgnorableError(err error) bool {
 	return false
 }
 
-func setupCacheCreator() {
+func setupCollectors(settings *models.Settings) {
 	var (
-		err      error
-		settings *models.Settings
-	)
-
-	if settings, err = settingsService.Read(); err != nil {
-		slog.Error("error getting cache schedule from the database", "error", err)
-		os.Exit(1)
-	}
-
-	cacheCreator.CreateCache()
-
-	cron.Add(settings.CollectorSchedule, func() {
-		cacheCreator.CreateCache()
-	})
-}
-
-func setupCollectors() {
-	var (
-		err      error
-		settings *models.Settings
+		err error
 	)
 
 	collectors := []collector.Collector{
 		jpegCollector,
-	}
-
-	if settings, err = settingsService.Read(); err != nil {
-		slog.Error("error getting cache schedule from the database", "error", err)
-		return
 	}
 
 	cron.Add(settings.CollectorSchedule, func() {

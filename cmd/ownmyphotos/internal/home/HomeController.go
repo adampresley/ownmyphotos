@@ -70,6 +70,7 @@ func (c HomeController) HomePage(w http.ResponseWriter, r *http.Request) {
 			IsHtmx:  httphelpers.IsHtmx(r),
 			JavascriptIncludes: []rendering.JavascriptInclude{
 				{Src: "/static/js/fslightbox.js", Type: "text/javascript"},
+				{Src: "/static/js/pages/home.js", Type: "module"},
 			},
 		},
 		Root:   strings.TrimSpace(httphelpers.GetFromRequest[string](r, "root")),

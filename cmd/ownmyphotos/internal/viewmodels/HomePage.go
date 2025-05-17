@@ -1,7 +1,6 @@
 package viewmodels
 
 import (
-	"fmt"
 	"html/template"
 
 	"github.com/adampresley/ownmyphotos/pkg/models"
@@ -23,6 +22,7 @@ type ImageModel struct {
 	Name         template.HTML
 	Photo        *models.Photo
 	IsFavorite   bool
+	Caption      string
 }
 
 func NewImageModelCollectionFromPhotos(photos []*models.Photo, childFolders []*models.Folder, libraryPath string) []ImageModel {
@@ -42,18 +42,23 @@ func NewImageModelCollectionFromPhotos(photos []*models.Photo, childFolders []*m
 		}
 	}
 
-	fmt.Printf("child folders: %+v\n", childFolders)
-
 	// Then add photos
 	for _, photo := range photos {
-		result = append(result, ImageModel{
+		img := ImageModel{
 			Ext:          photo.Ext,
 			IsDirectory:  false,
 			DirPath:      photo.FullPath,
 			RelativePath: services.GetPhotoRelativePath(libraryPath, photo),
 			Name:         template.HTML(photo.FileName),
 			Photo:        photo,
-		})
+			Caption:      photo.FileName,
+		}
+
+		if photo.Caption != "" {
+			img.Caption = photo.Caption
+		}
+
+		result = append(result, img)
 	}
 
 	return result

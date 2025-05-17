@@ -12,6 +12,7 @@ import (
 	"github.com/adampresley/adamgokit/slices"
 	"github.com/adampresley/imagemetadata"
 	"github.com/adampresley/imagemetadata/imagemodel"
+	"github.com/adampresley/ownmyphotos/pkg/cache"
 	"github.com/adampresley/ownmyphotos/pkg/models"
 	"github.com/adampresley/ownmyphotos/pkg/services"
 	"github.com/alitto/pond/v2"
@@ -19,6 +20,7 @@ import (
 
 type JpegCollectorConfig struct {
 	CachePath     string
+	CacheCreator  cache.CacheCreator
 	FolderService services.FolderServicer
 	PhotoCache    services.PhotoCacher
 	PhotoService  services.PhotoServicer
@@ -26,6 +28,7 @@ type JpegCollectorConfig struct {
 
 type JpegCollector struct {
 	cachePath     string
+	cacheCreator  cache.CacheCreator
 	folderService services.FolderServicer
 	photoCache    services.PhotoCacher
 	photoService  services.PhotoServicer
@@ -48,6 +51,7 @@ func NewJpegCollector(config JpegCollectorConfig) (*JpegCollector, error) {
 
 	return &JpegCollector{
 		cachePath:     config.CachePath,
+		cacheCreator:  config.CacheCreator,
 		folderService: config.FolderService,
 		photoCache:    config.PhotoCache,
 		photoService:  config.PhotoService,
@@ -136,7 +140,6 @@ func (c *JpegCollector) syncPhotos(settings *models.Settings, allPhotos []*model
 		errs []error
 	)
 
-	// seenDirs := map[string]struct{}{}
 	dirStack := datastructures.NewStack[*models.Folder]()
 
 	filepath.WalkDir(settings.LibraryPath, func(path string, d os.DirEntry, err error) error {
@@ -213,8 +216,7 @@ func (c *JpegCollector) syncPhotos(settings *models.Settings, allPhotos []*model
 		albumPath := strings.TrimPrefix(filepath.Dir(strings.TrimPrefix(path, settings.LibraryPath)), string(os.PathSeparator))
 		fileName := strings.TrimSuffix(filepath.Base(path), ext)
 		fullImagePath := services.GetPhotoPath(settings.LibraryPath, albumPath, fileName, ext)
-
-		slog.Info("processing photo", "path", path, "album", albumPath, "file", fileName, "ext", ext)
+		fullCachePath := services.GetThumbnailCachePath(settings.LibraryPath, c.cachePath, albumPath, fileName, ext)
 
 		/*
 		 * Open the photo and extract metadata.
@@ -258,7 +260,12 @@ func (c *JpegCollector) syncPhotos(settings *models.Settings, allPhotos []*model
 		}
 
 		if existingPhoto.ID != fileID || existingPhoto.MetadataHash != filePhoto.MetadataHash {
-			// TODO: Create the cached image
+			action := "creating"
+
+			if err = c.cacheCreator.CreateCacheFile(fullImagePath, fullCachePath); err != nil {
+				errs = append(errs, fmt.Errorf("could not create cache file for '%s': %w", fullImagePath, err))
+				return nil
+			}
 
 			// Determine what we should do with the photo: update or create
 			filePhoto.ID = fileID
@@ -266,10 +273,19 @@ func (c *JpegCollector) syncPhotos(settings *models.Settings, allPhotos []*model
 			if existingPhoto.ID == fileID {
 				filePhoto.CreatedAt = existingPhoto.CreatedAt
 				filePhoto.UpdatedAt = time.Now().UTC()
+				action = "updating"
 			}
+
+			slog.Info(action+" photo", "path", fullImagePath)
 
 			if err = c.photoService.Save(filePhoto); err != nil {
 				errs = append(errs, fmt.Errorf("could not save photo '%s': %w", fileName, err))
+				return nil
+			}
+		} else if !c.cacheCreator.DoesExist(fullCachePath) {
+			slog.Info("creating cache file for photo", "path", fullCachePath)
+			if err = c.cacheCreator.CreateCacheFile(fullImagePath, fullCachePath); err != nil {
+				errs = append(errs, fmt.Errorf("could not create cache file for '%s': %w", fullImagePath, err))
 				return nil
 			}
 		}
