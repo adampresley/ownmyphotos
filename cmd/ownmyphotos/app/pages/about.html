@@ -1,0 +1,18 @@
+{{if .IsHtmx}}
+{{template "no-layout" .}}
+{{else}}
+{{template "layouts/layout" .}}
+{{end}}
+
+{{define "title"}}About{{end}}
+{{define "content"}}
+
+<section>
+	<p>
+		Adam Go Kit uses as little external libraries as possible, while still
+		trying to be useful.
+	</p>
+</section>
+
+{{end}}
+

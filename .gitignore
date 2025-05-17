@@ -1,0 +1,8 @@
+.DS_Store
+.ThumbDB
+.env.production
+.env
+pusher.yaml
+tmp/
+cmd/ownmyphotos/data
+!cmd/ownmyphotos/data/.gitkeep

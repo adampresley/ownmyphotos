@@ -1,0 +1,51 @@
+{{if .IsHtmx}}
+{{template "no-layout" .}}
+{{else}}
+{{template "layouts/layout" .}}
+{{end}}
+
+{{define "title"}}Settings{{end}}
+
+{{define "content"}}
+<h2>App Settings</h2>
+
+{{template "components/display-messages" .}}
+
+<form hx-post="/settings" hx-target="#mainContent" hx-push-url="true">
+   <fieldset>
+      <legend>Library Settings</legend>
+
+      <label for="libraryPath">
+         Library Directory
+         <input type="text" id="libraryPath" name="libraryPath"
+            placeholder="Enter the root directory path for you photo library" value="{{.Settings.LibraryPath}}"
+            autocomplete="off" required>
+      </label>
+
+   </fieldset>
+
+   <fieldset>
+      <legend>Collector Settings</legend>
+
+      <label for="thumbnailSize">
+         Thumbnail Size
+         <input type="number" id="thumbnailSize" name="thumbnailSize" placeholder="Enter the thumbnail size" max="2048"
+            min="256" value="{{.Settings.ThumbnailSize}}" autocomplete="off" required>
+      </label>
+
+      <label for="cacheSchedule">
+         Collector Schedule (CRON)
+         <input type="text" id="collectorSchedule" name="collectorSchedule" value="{{.Settings.CollectorSchedule}}"
+            autocomplete="off" required>
+      </label>
+
+      <label for="maxWorkers">
+         Max Workers
+         <input type="number" id="maxWorkers" name="maxWorkers" max="50" min="1" value="{{.Settings.MaxWorkers}}"
+            autocomplete="off" required>
+      </label>
+   </fieldset>
+
+   <button>Save Settings</button>
+</form>
+{{end}}

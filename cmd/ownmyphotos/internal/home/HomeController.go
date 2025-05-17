@@ -1,0 +1,145 @@
+package home
+
+import (
+	"log/slog"
+	"net/http"
+	"path/filepath"
+	"strings"
+
+	"github.com/adampresley/adamgokit/httphelpers"
+	"github.com/adampresley/adamgokit/rendering"
+	"github.com/adampresley/ownmyphotos/cmd/ownmyphotos/internal/configuration"
+	"github.com/adampresley/ownmyphotos/cmd/ownmyphotos/internal/viewmodels"
+	"github.com/adampresley/ownmyphotos/pkg/models"
+	"github.com/adampresley/ownmyphotos/pkg/services"
+)
+
+type HomeHandlers interface {
+	HomePage(w http.ResponseWriter, r *http.Request)
+	AboutPage(w http.ResponseWriter, r *http.Request)
+}
+
+type HomeControllerConfig struct {
+	Config          *configuration.Config
+	FolderService   services.FolderServicer
+	PhotoService    services.PhotoServicer
+	Renderer        rendering.TemplateRenderer
+	SettingsService services.SettingsServicer
+}
+
+type HomeController struct {
+	config          *configuration.Config
+	folderService   services.FolderServicer
+	photoService    services.PhotoServicer
+	renderer        rendering.TemplateRenderer
+	settingsService services.SettingsServicer
+}
+
+func NewHomeController(config HomeControllerConfig) HomeController {
+	return HomeController{
+		config:          config.Config,
+		folderService:   config.FolderService,
+		photoService:    config.PhotoService,
+		renderer:        config.Renderer,
+		settingsService: config.SettingsService,
+	}
+}
+
+func (c HomeController) HomePage(w http.ResponseWriter, r *http.Request) {
+	var (
+		err       error
+		settings  *models.Settings
+		cleanRoot string
+		photos    []*models.Photo
+		folders   []*models.Folder
+	)
+
+	/*
+	 * Ignore metadata queries, like ".well_know"
+	 */
+	if strings.HasPrefix(r.URL.String(), "/.") {
+		http.StatusText(http.StatusNoContent)
+		return
+	}
+
+	pageName := "pages/home"
+
+	viewData := viewmodels.Home{
+		BaseViewModel: viewmodels.BaseViewModel{
+			Message: "",
+			IsHtmx:  httphelpers.IsHtmx(r),
+			JavascriptIncludes: []rendering.JavascriptInclude{
+				{Src: "/static/js/fslightbox.js", Type: "text/javascript"},
+			},
+		},
+		Root:   strings.TrimSpace(httphelpers.GetFromRequest[string](r, "root")),
+		Images: []viewmodels.ImageModel{},
+		Parent: "root",
+	}
+
+	if settings, err = c.settingsService.Read(); err != nil {
+		slog.Error("error reading settings", "error", err)
+		viewData.Message = "Error reading settings"
+		viewData.IsError = true
+
+		c.renderer.Render(pageName, viewData, w)
+		return
+	}
+
+	if cleanRoot, err = c.config.SanitizePath(settings.LibraryPath, viewData.Root); err != nil {
+		slog.Error("error determining root path", "error", err, "root", viewData.Root)
+		viewData.Message = "Invalid root path"
+		viewData.IsError = true
+
+		c.renderer.Render(pageName, viewData, w)
+		return
+	}
+
+	if viewData.Root != "" {
+		pathParts := strings.Split(filepath.ToSlash(viewData.Root), "/")
+
+		if len(pathParts) > 1 {
+			viewData.Parent = strings.Join(pathParts[:len(pathParts)-1], "/")
+		} else if len(pathParts) == 1 {
+			viewData.Parent = ""
+		}
+	}
+
+	/*
+	 * Get photos for this path.
+	 */
+	if photos, err = c.photoService.GetPhotosInFolder(cleanRoot); err != nil {
+		slog.Error("error getting photos", "error", err, "root", cleanRoot)
+		viewData.Message = "There was an error retrieving photos for the path '" + cleanRoot + "'."
+		viewData.IsError = true
+
+		c.renderer.Render(pageName, viewData, w)
+		return
+	}
+
+	if folders, err = c.folderService.GetChildren(services.GetRelativePathFromFullPath(settings.LibraryPath, cleanRoot)); err != nil {
+		slog.Error("error getting folders", "error", err, "root", cleanRoot)
+		viewData.Message = "There was an error folder information for '" + cleanRoot + "'."
+		viewData.IsError = true
+
+		c.renderer.Render(pageName, viewData, w)
+		return
+	}
+
+	viewData.Images = viewmodels.NewImageModelCollectionFromPhotos(photos, folders, settings.LibraryPath)
+	c.renderer.Render(pageName, viewData, w)
+}
+
+func (c HomeController) AboutPage(w http.ResponseWriter, r *http.Request) {
+	pageName := "pages/about"
+
+	viewData := viewmodels.AboutPage{
+		BaseViewModel: viewmodels.BaseViewModel{
+			Message:            "",
+			IsHtmx:             httphelpers.IsHtmx(r),
+			JavascriptIncludes: []rendering.JavascriptInclude{},
+		},
+	}
+
+	c.renderer.Render(pageName, viewData, w)
+}

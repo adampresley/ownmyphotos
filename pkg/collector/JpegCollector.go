@@ -1,0 +1,281 @@
+package collector
+
+import (
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/adampresley/adamgokit/datastructures"
+	"github.com/adampresley/adamgokit/slices"
+	"github.com/adampresley/imagemetadata"
+	"github.com/adampresley/imagemetadata/imagemodel"
+	"github.com/adampresley/ownmyphotos/pkg/models"
+	"github.com/adampresley/ownmyphotos/pkg/services"
+	"github.com/alitto/pond/v2"
+)
+
+type JpegCollectorConfig struct {
+	CachePath     string
+	FolderService services.FolderServicer
+	PhotoCache    services.PhotoCacher
+	PhotoService  services.PhotoServicer
+}
+
+type JpegCollector struct {
+	cachePath     string
+	folderService services.FolderServicer
+	photoCache    services.PhotoCacher
+	photoService  services.PhotoServicer
+
+	pool    pond.Pool
+	running bool
+}
+
+func NewJpegCollector(config JpegCollectorConfig) (*JpegCollector, error) {
+	var (
+		err error
+	)
+
+	// Ensure cache path exists
+	if _, err = os.Stat(config.CachePath); os.IsNotExist(err) {
+		if err = os.MkdirAll(config.CachePath, 0755); err != nil {
+			return &JpegCollector{}, fmt.Errorf("error creating cache directory: %w", err)
+		}
+	}
+
+	return &JpegCollector{
+		cachePath:     config.CachePath,
+		folderService: config.FolderService,
+		photoCache:    config.PhotoCache,
+		photoService:  config.PhotoService,
+		running:       false,
+	}, nil
+}
+
+func (c *JpegCollector) Run(settingsService services.SettingsServicer) ([]error, error) {
+	var (
+		err           error
+		processErrors []error
+		allPhotos     []*models.Photo
+		settings      *models.Settings
+	)
+
+	if c.running {
+		return []error{}, ErrCollectorAlreadyRunning
+	}
+
+	c.running = true
+	defer func() {
+		c.running = false
+	}()
+
+	if settings, err = settingsService.Read(); err != nil {
+		return []error{}, fmt.Errorf("error reading settings: %w", err)
+	}
+
+	/*
+	 * Verify the library path exists. If not, return an error.
+	 */
+	if _, err := os.Stat(settings.LibraryPath); os.IsNotExist(err) {
+		return []error{}, ErrInvalidLibraryPath
+	}
+
+	slog.Info("starting JpegCollector", "maxWorkers", settings.MaxWorkers, "libraryPath", settings.LibraryPath, "cachePath", c.cachePath)
+
+	if allPhotos, err = c.photoService.All(); err != nil {
+		return []error{}, fmt.Errorf("error retrieving all photos: %w", err)
+	}
+
+	slog.Info("retrieved all database photos", "count", len(allPhotos))
+
+	/*
+	 * Clean removed photos from the library and the database.
+	 */
+	processErrors = append(processErrors, c.cleanRemovedPhotos(settings, allPhotos)...)
+	processErrors = append(processErrors, c.syncPhotos(settings, allPhotos)...)
+
+	return processErrors, nil
+}
+
+func (c *JpegCollector) cleanRemovedPhotos(settings *models.Settings, allPhotos []*models.Photo) []error {
+	return []error{}
+	// var (
+	// 	err  error
+	// 	errs []error
+	// )
+	//
+	// for _, photo := range allPhotos {
+	// 	fullPath := services.GetPhotoPath(settings.LibraryPath, photo.FilePath, photo.FileName, photo.Ext)
+	// 	if _, err = os.Stat(fullPath); errors.Is(err, os.ErrNotExist) {
+	// 		errs = append(errs, fmt.Errorf("photo '%s' not found in library at '%s'", photo.FileName, fullPath))
+	// 		continue
+	// 	}
+	//
+	// 	/*
+	// 	 * Delete the photo from the database and cache.
+	// 	 */
+	// 	if err = c.photoService.Delete(photo.ID); err != nil {
+	// 		errs = append(errs, fmt.Errorf("could not delete photo '%s': %w", photo.FileName, err))
+	// 		continue
+	// 	}
+	//
+	// 	if err = c.photoCache.Remove(settings, photo); err != nil {
+	// 		errs = append(errs, fmt.Errorf("could not remove photo '%s' from cache: %w", photo.FileName, err))
+	// 		continue
+	// 	}
+	// }
+	//
+	// return errs
+}
+
+func (c *JpegCollector) syncPhotos(settings *models.Settings, allPhotos []*models.Photo) []error {
+	var (
+		errs []error
+	)
+
+	// seenDirs := map[string]struct{}{}
+	dirStack := datastructures.NewStack[*models.Folder]()
+
+	filepath.WalkDir(settings.LibraryPath, func(path string, d os.DirEntry, err error) error {
+		var (
+			fileID    string
+			f         *os.File
+			imageData *imagemodel.ImageData
+		)
+
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() {
+			folder := strings.TrimPrefix(path, settings.LibraryPath)
+			parentPath := ""
+
+			// get the last folder
+			splitPath := strings.Split(folder, string(os.PathSeparator))
+
+			if len(splitPath) > 1 {
+				folder = splitPath[len(splitPath)-1]
+				parentPath = strings.Join(splitPath[:len(splitPath)-1], string(os.PathSeparator))
+			}
+
+			newFolder := &models.Folder{
+				FolderName: folder,
+				ParentPath: parentPath,
+				KeyPhotoID: "",
+				FullPath:   path,
+			}
+
+			topOfStack := &models.Folder{}
+
+			if dirStack.Size() > 0 {
+				topOfStack = dirStack.Top()
+			}
+
+			/*
+			 * If this is a new folder, and it's not a child of the top folder on the stack,
+			 * pop from the stack until we find a folder that is a child of the top folder on the stack.
+			 */
+			if topOfStack != nil && len(splitPath) < dirStack.Size() {
+				for i := len(splitPath) - 1; i > 0; i-- {
+					combined := strings.Join(splitPath[:i], string(os.PathSeparator))
+					if combined == dirStack.Top().FolderName {
+						break
+					}
+
+					_ = dirStack.Pop()
+				}
+			}
+
+			dirStack.Push(newFolder)
+
+			if err = c.folderService.Save(newFolder); err != nil {
+				errs = append(errs, fmt.Errorf("could not save folder '%s': %w", path, err))
+				return err
+			}
+
+			return nil
+		}
+
+		/*
+		 * Skip non-JPEG files.
+		 */
+		ext := filepath.Ext(path)
+		lowerExt := strings.ToLower(ext)
+
+		if lowerExt != ".jpg" && lowerExt != ".jpeg" {
+			return nil
+		}
+
+		albumPath := strings.TrimPrefix(filepath.Dir(strings.TrimPrefix(path, settings.LibraryPath)), string(os.PathSeparator))
+		fileName := strings.TrimSuffix(filepath.Base(path), ext)
+		fullImagePath := services.GetPhotoPath(settings.LibraryPath, albumPath, fileName, ext)
+
+		slog.Info("processing photo", "path", path, "album", albumPath, "file", fileName, "ext", ext)
+
+		/*
+		 * Open the photo and extract metadata.
+		 */
+		if f, err = os.Open(fullImagePath); err != nil {
+			errs = append(errs, fmt.Errorf("could not open file '%s': %w", fullImagePath, err))
+			return nil
+		}
+
+		defer f.Close()
+
+		if imageData, err = imagemetadata.NewFromJPEG(f); err != nil {
+			errs = append(errs, fmt.Errorf("could not extract metadata from file '%s': %w", fullImagePath, err))
+			return nil
+		}
+
+		/*
+		 * Find an existing photo, if any, in the database. This will help
+		 * us determine if we need to create a new record, or update an existing one.
+		 */
+		existingPhoto := slices.Find(allPhotos, func(p *models.Photo) bool {
+			if p.FileName == fileName && p.Ext == ext {
+				return true
+			}
+
+			return false
+		})
+
+		filePhoto := models.NewPhotoFromImageData(
+			fullImagePath,
+			imageData,
+		)
+
+		if fileID, err = c.photoService.GetFileID(fullImagePath); err != nil {
+			errs = append(errs, fmt.Errorf("could not get file ID for '%s': %w", fullImagePath, err))
+			return nil
+		}
+
+		if existingPhoto == nil {
+			existingPhoto = &models.Photo{}
+		}
+
+		if existingPhoto.ID != fileID || existingPhoto.MetadataHash != filePhoto.MetadataHash {
+			// TODO: Create the cached image
+
+			// Determine what we should do with the photo: update or create
+			filePhoto.ID = fileID
+
+			if existingPhoto.ID == fileID {
+				filePhoto.CreatedAt = existingPhoto.CreatedAt
+				filePhoto.UpdatedAt = time.Now().UTC()
+			}
+
+			if err = c.photoService.Save(filePhoto); err != nil {
+				errs = append(errs, fmt.Errorf("could not save photo '%s': %w", fileName, err))
+				return nil
+			}
+		}
+
+		return nil
+	})
+
+	return errs
+}
