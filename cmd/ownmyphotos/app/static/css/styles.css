@@ -108,6 +108,79 @@ article.warning {
    }
 }
 
+/*
+ * Search 
+ */
+.photo-search-results {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 1rem;
+   margin-bottom: 2.5rem;
+
+   div {
+      img {
+         height: 10rem;
+         max-width: 10rem;
+      }
+   }
+}
+
+.keyword-search-results {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 1rem;
+   margin-bottom: 2.5rem;
+
+   div {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+
+      i {
+         width: 4rem;
+         height: 4rem;
+      }
+   }
+}
+
+.people-search-results {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 1rem;
+   margin-bottom: 2.5rem;
+
+   div {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+
+      i {
+         width: 4rem;
+         height: 4rem;
+      }
+   }
+}
+
+.folder-search-results {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 1rem;
+   margin-bottom: 2.5rem;
+
+   div {
+      a {
+         display: flex;
+         flex-direction: column;
+         align-items: center;
+
+         i {
+            width: 4rem;
+            height: 4rem;
+         }
+      }
+   }
+}
+
 /* 
  * Icons 
  */
@@ -140,4 +213,12 @@ article.warning {
 
 .icon-folder-arrow-up {
    --svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M22 8v5.81c-.88-.51-1.9-.81-3-.81c-3.31 0-6 2.69-6 6c0 .34.04.67.09 1H4a2 2 0 0 1-2-2V6c0-1.11.89-2 2-2h6l2 2h8a2 2 0 0 1 2 2m-6 10h2v4h2v-4h2l-3-3z'/%3E%3C/svg%3E");
+}
+
+.icon-person {
+   --svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M12 4a4 4 0 0 1 4 4a4 4 0 0 1-4 4a4 4 0 0 1-4-4a4 4 0 0 1 4-4m0 10c4.42 0 8 1.79 8 4v2H4v-2c0-2.21 3.58-4 8-4'/%3E%3C/svg%3E");
+}
+
+.icon-keyword {
+   --svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M5.5 7A1.5 1.5 0 0 1 4 5.5A1.5 1.5 0 0 1 5.5 4A1.5 1.5 0 0 1 7 5.5A1.5 1.5 0 0 1 5.5 7m15.91 4.58l-9-9C12.05 2.22 11.55 2 11 2H4c-1.11 0-2 .89-2 2v7c0 .55.22 1.05.59 1.41l8.99 9c.37.36.87.59 1.42.59s1.05-.23 1.41-.59l7-7c.37-.36.59-.86.59-1.41c0-.56-.23-1.06-.59-1.42'/%3E%3C/svg%3E");
 }

@@ -17,6 +17,7 @@ import (
 type HomeHandlers interface {
 	HomePage(w http.ResponseWriter, r *http.Request)
 	AboutPage(w http.ResponseWriter, r *http.Request)
+	SimpleSearchPage(w http.ResponseWriter, r *http.Request)
 }
 
 type HomeControllerConfig struct {
@@ -128,6 +129,52 @@ func (c HomeController) HomePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	viewData.Images = viewmodels.NewImageModelCollectionFromPhotos(photos, folders, settings.LibraryPath)
+	c.renderer.Render(pageName, viewData, w)
+}
+
+func (c HomeController) SimpleSearchPage(w http.ResponseWriter, r *http.Request) {
+	var (
+		err      error
+		settings *models.Settings
+	)
+
+	pageName := "pages/simple-search"
+
+	viewData := viewmodels.SimpleSearch{
+		BaseViewModel: viewmodels.BaseViewModel{
+			IsHtmx:             httphelpers.IsHtmx(r),
+			JavascriptIncludes: []rendering.JavascriptInclude{},
+		},
+		SearchTerm:  httphelpers.GetFromRequest[string](r, "term"),
+		Root:        httphelpers.GetFromRequest[string](r, "root"),
+		Results:     models.SearchPhotosResult{},
+		LibraryPath: "",
+	}
+
+	criteria := models.PhotoSearch{
+		SearchTerm: viewData.SearchTerm,
+	}
+
+	if settings, err = c.settingsService.Read(); err != nil {
+		slog.Error("error reading settings", "error", err)
+		viewData.Message = "Error reading settings"
+		viewData.IsError = true
+
+		c.renderer.Render(pageName, viewData, w)
+		return
+	}
+
+	viewData.LibraryPath = settings.LibraryPath
+
+	if viewData.Results, err = c.photoService.Search(criteria); err != nil {
+		slog.Error("error searching for photos", "error", err, "term", viewData.SearchTerm)
+		viewData.Message = "There was an error searching for photos with the term '" + viewData.SearchTerm + "'."
+		viewData.IsError = true
+
+		c.renderer.Render(pageName, viewData, w)
+		return
+	}
+
 	c.renderer.Render(pageName, viewData, w)
 }
 

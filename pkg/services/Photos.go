@@ -3,12 +3,15 @@ package services
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/adampresley/ownmyphotos/pkg/models"
+	"github.com/alitto/pond/v2"
 	"github.com/rfberaldo/sqlz"
 )
 
@@ -44,6 +47,17 @@ type PhotoServicer interface {
 	 * Saves a photo to the database.
 	 */
 	Save(photo *models.Photo) error
+
+	/*
+	 * Searches for photos based on various criteria. This will
+	 * return matches of photos, keywords, and people.
+	 */
+	Search(criteria models.PhotoSearch) (models.SearchPhotosResult, error)
+}
+
+type searchResultSet struct {
+	Type    string
+	Results []*models.Photo
 }
 
 type PhotoServiceConfig struct {
@@ -386,7 +400,7 @@ func (s PhotoService) Save(photo *models.Photo) error {
 			) ON CONFLICT (keyword) DO NOTHING;
 		`
 
-		args := []any{keyword.Keyword}
+		args := []any{keyword.Keyword, keyword.Keyword}
 
 		if _, err = tx.Exec(ctx, statement, args...); err != nil {
 			_ = tx.Rollback()
@@ -395,27 +409,41 @@ func (s PhotoService) Save(photo *models.Photo) error {
 	}
 
 	for _, person := range photo.People {
-		statement = `
-			INSERT INTO people (
-				created_at
-				, updated_at
-				, name
-			) VALUES (
-				?
-				, ?
-				, ?
-			) ON CONFLICT (name) DO NOTHING;
-		`
+		// Does this person already exist?
+		var personID int64
+		statement = `SELECT id FROM people WHERE name=?`
 
-		args := []any{time.Now().UTC(), time.Now().UTC(), person.Name}
+		args := []any{person.Name}
 
-		if r, err = tx.Exec(ctx, statement, args...); err != nil {
+		if err = tx.QueryRow(ctx, &personID, statement, args); err != nil && !sqlz.IsNotFound(err) {
 			_ = tx.Rollback()
-			return fmt.Errorf("error inserting person %s: %w", person.Name, err)
+			return fmt.Errorf("error querying for person %s: %w", person.Name, err)
 		}
 
-		lastInsertID, _ := r.LastInsertId()
-		person.ID = uint(lastInsertID)
+		if sqlz.IsNotFound(err) {
+			statement = `
+				INSERT INTO people (
+					created_at
+					, updated_at
+					, name
+				) VALUES (
+					?
+					, ?
+					, ?
+				) ON CONFLICT (name) DO NOTHING;
+			`
+
+			args := []any{time.Now().UTC(), time.Now().UTC(), person.Name, time.Now().UTC()}
+
+			if r, err = tx.Exec(ctx, statement, args...); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("error inserting person %s: %w", person.Name, err)
+			}
+
+			personID, _ = r.LastInsertId()
+		}
+
+		person.ID = uint(personID)
 	}
 
 	statement = `
@@ -555,4 +583,276 @@ func (s PhotoService) Save(photo *models.Photo) error {
 	 */
 	_ = tx.Commit()
 	return nil
+}
+
+func (s PhotoService) Search(criteria models.PhotoSearch) (models.SearchPhotosResult, error) {
+	var (
+		result = models.SearchPhotosResult{
+			PhotoMatches:   []*models.Photo{},
+			FolderMatches:  []*models.Folder{},
+			KeywordMatches: []*models.KeywordSearchResult{},
+			PeopleMatches:  []*models.Person{},
+		}
+	)
+
+	pool := pond.NewResultPool[models.SearchPhotosResult](0)
+	group := pool.NewGroup()
+
+	// Search for just photos
+	_ = group.Submit(func() models.SearchPhotosResult {
+		c := models.PhotoSearch{
+			SearchTerm: criteria.SearchTerm,
+		}
+
+		results, err := s.search(c)
+
+		if err != nil {
+			slog.Error("error searching for photos by term", "term", criteria.SearchTerm, "error", err)
+			return models.SearchPhotosResult{}
+		}
+
+		return models.SearchPhotosResult{
+			PhotoMatches: results,
+		}
+	})
+
+	// Search for photos by keywords
+	_ = group.Submit(func() models.SearchPhotosResult {
+		c := models.PhotoSearch{
+			SearchTerm: criteria.SearchTerm,
+		}
+
+		keywordSearchResults, err := s.searchKeywords(c)
+
+		if err != nil {
+			slog.Error("error searching for photos by keywords", "keyword", criteria.SearchTerm, "error", err)
+			return models.SearchPhotosResult{}
+		}
+
+		return models.SearchPhotosResult{KeywordMatches: keywordSearchResults}
+	})
+
+	// Search for photos by people
+	_ = group.Submit(func() models.SearchPhotosResult {
+		results, err := s.searchPeople(models.PhotoSearch{SearchTerm: criteria.SearchTerm})
+
+		if err != nil {
+			slog.Error("error searching for photos by people", "person", criteria.SearchTerm)
+			return models.SearchPhotosResult{}
+		}
+
+		return models.SearchPhotosResult{PeopleMatches: results}
+	})
+
+	// Search for folders
+	_ = group.Submit(func() models.SearchPhotosResult {
+		c := models.PhotoSearch{
+			SearchTerm: criteria.SearchTerm,
+		}
+
+		results, err := s.searchFolders(c)
+
+		if err != nil {
+			slog.Error("error searching for folders by term", "term", criteria.SearchTerm)
+			return models.SearchPhotosResult{}
+		}
+
+		return models.SearchPhotosResult{FolderMatches: results}
+	})
+
+	poolResults, _ := group.Wait()
+
+	for _, resultSet := range poolResults {
+		if resultSet.PhotoMatches != nil && len(resultSet.PhotoMatches) > 0 {
+			result.PhotoMatches = append(result.PhotoMatches, resultSet.PhotoMatches...)
+		}
+
+		if resultSet.KeywordMatches != nil && len(resultSet.KeywordMatches) > 0 {
+			result.KeywordMatches = append(result.KeywordMatches, resultSet.KeywordMatches...)
+		}
+
+		if resultSet.PeopleMatches != nil && len(resultSet.PeopleMatches) > 0 {
+			result.PeopleMatches = append(result.PeopleMatches, resultSet.PeopleMatches...)
+		}
+
+		if resultSet.FolderMatches != nil && len(resultSet.FolderMatches) > 0 {
+			result.FolderMatches = append(result.FolderMatches, resultSet.FolderMatches...)
+		}
+	}
+
+	return result, nil
+}
+
+func (s PhotoService) search(criteria models.PhotoSearch) ([]*models.Photo, error) {
+	var (
+		err    error
+		photos = []*models.Photo{}
+	)
+
+	maxResults := 100
+	parameters := []any{}
+
+	statement := `
+SELECT 
+    p.id,
+    p.created_at,
+    p.updated_at,
+    p.deleted_at,
+    p.file_name,
+    p.ext,
+    p.full_path,
+    p.metadata_hash,
+    p.lens_make,
+    p.lens_model,
+    p.lens_id,
+    p.make,
+    p.model,
+    p.caption,
+    p.title,
+    p.creation_date_time,
+    p.width,
+    p.height,
+    p.latitude,
+    p.longitude,
+    p.iptc_digest,
+    p.year,
+    (
+        SELECT json_group_array(k.keyword)
+        FROM photos_keywords pk
+        JOIN keywords k ON pk.keyword = k.keyword
+        WHERE pk.photo_id = p.id
+    ) AS keywords,
+    (
+        SELECT json_group_array(json_object('id', pe.id, 'name', pe.name))
+        FROM photos_people pp
+        JOIN people pe ON pp.person_id = pe.id
+        WHERE pp.photo_id = p.id
+    ) AS people
+FROM photos p
+WHERE 1=1
+	AND p.deleted_at IS NULL
+	`
+
+	// General
+	if len(criteria.SearchTerm) > 0 {
+		statement += ` 
+AND (
+	LOWER(p.file_name) LIKE ? 
+	OR LOWER(p.title) LIKE ? 
+	OR LOWER(p.caption) LIKE ? 
+)
+		`
+
+		parameters = append(parameters, fmt.Sprintf("%%%s%%", strings.ToLower(criteria.SearchTerm)))
+		parameters = append(parameters, fmt.Sprintf("%%%s%%", strings.ToLower(criteria.SearchTerm)))
+		parameters = append(parameters, fmt.Sprintf("%%%s%%", strings.ToLower(criteria.SearchTerm)))
+	}
+
+	// Keywords
+	if len(criteria.Keywords) > 0 {
+		statement += ` 
+AND p.id IN (
+	SELECT photo_id FROM photos_keywords
+	WHERE LOWER(keyword) IN (?)
+
+)
+		`
+
+		for _, keyword := range criteria.Keywords {
+			parameters = append(parameters, strings.ToLower(keyword))
+		}
+	}
+
+	statement += fmt.Sprintf(` ORDER BY p.creation_date_time LIMIT %d`, maxResults)
+
+	if len(criteria.People) > 0 {
+		fmt.Printf("\n\n%s\n\n", statement)
+	}
+
+	ctx, cancel := DBContext()
+	defer cancel()
+
+	if err = s.db.Query(ctx, &photos, statement, parameters...); err != nil {
+		return photos, fmt.Errorf("error executing search query: %w", err)
+	}
+
+	return photos, nil
+}
+
+func (s PhotoService) searchPeople(criteria models.PhotoSearch) ([]*models.Person, error) {
+	var (
+		err     error
+		results = []*models.Person{}
+	)
+
+	statement := `SELECT id, name FROM people WHERE 1=1 AND LOWER(name) like ?;`
+
+	ctx, cancel := DBContext()
+	defer cancel()
+
+	if err = s.db.Query(ctx, &results, statement, fmt.Sprintf("%%%s%%", strings.ToLower(criteria.SearchTerm))); err != nil {
+		return results, fmt.Errorf("error executing search query for people: %w", err)
+	}
+
+	return results, nil
+}
+
+func (s PhotoService) searchKeywords(criteria models.PhotoSearch) ([]*models.KeywordSearchResult, error) {
+	var (
+		err     error
+		results = []*models.KeywordSearchResult{}
+	)
+
+	statement := `
+        SELECT 
+            k.keyword,
+            COUNT(pk.photo_id) as num_matches
+        FROM 
+            keywords k
+        LEFT JOIN 
+            photos_keywords pk ON k.keyword = pk.keyword
+        WHERE 
+            LOWER(k.keyword) LIKE ?
+        GROUP BY 
+            k.keyword
+    `
+
+	ctx, cancel := DBContext()
+	defer cancel()
+
+	if err = s.db.Query(ctx, &results, statement, fmt.Sprintf("%%%s%%", strings.ToLower(criteria.SearchTerm))); err != nil {
+		return results, fmt.Errorf("error executing search query for keywords: %w", err)
+	}
+
+	return results, nil
+}
+
+func (s PhotoService) searchFolders(criteria models.PhotoSearch) ([]*models.Folder, error) {
+	var (
+		err     error
+		results = []*models.Folder{}
+	)
+
+	statement := `
+        SELECT 
+            folder_name,
+            parent_path,
+            key_photo_id,
+            full_path
+        FROM 
+            folders
+        WHERE 
+            LOWER(folder_name) = ?
+        ORDER BY 
+            folder_name ASC
+    `
+
+	ctx, cancel := DBContext()
+	defer cancel()
+
+	if err = s.db.Query(ctx, &results, statement, strings.ToLower(criteria.SearchTerm)); err != nil {
+		return results, fmt.Errorf("error executing search query for folders: %w", err)
+	}
+
+	return results, nil
 }

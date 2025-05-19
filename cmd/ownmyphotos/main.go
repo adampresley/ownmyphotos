@@ -158,6 +158,7 @@ func main() {
 		{Path: "GET /about", HandlerFunc: homeController.AboutPage},
 		{Path: "GET /settings", HandlerFunc: settingsController.SettingsPage},
 		{Path: "POST /settings", HandlerFunc: settingsController.SettingsAction},
+		{Path: "POST /search/simple", HandlerFunc: homeController.SimpleSearchPage},
 		{Path: "GET /library/{id}", HandlerFunc: libraryController.ServeImage},
 		{Path: "GET /library/{id}/thumbnail", HandlerFunc: libraryController.ServeThumbnail},
 	}

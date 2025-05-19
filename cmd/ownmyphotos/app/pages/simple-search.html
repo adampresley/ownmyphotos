@@ -1,0 +1,68 @@
+{{if .IsHtmx}}
+{{template "no-layout" .}}
+{{else}}
+{{template "layouts/layout" .}}
+{{end}}
+
+{{define "content"}}
+{{template "components/display-messages" .}}
+
+{{if len .Results.PhotoMatches}}
+<h2>Photo Matches</h2>
+
+<section class="photo-search-results">
+   {{range .Results.PhotoMatches}}
+   <div>
+      <img src="/library/{{.ID}}" alt="{{.FileName}}" />
+   </div>
+   {{end}}
+</section>
+{{end}}
+
+{{if len .Results.KeywordMatches}}
+<h2>Keyword Matches</h2>
+
+<section class="keyword-search-results">
+   {{range .Results.KeywordMatches}}
+   <div>
+      <i class="icon icon-keyword"></i>
+      <div>{{.Keyword}}</div>
+      <div>{{.NumMatches}} photos</div>
+   </div>
+   {{end}}
+</section>
+{{end}}
+
+{{if len .Results.PeopleMatches}}
+<h2>People Matches</h2>
+
+<section class="people-search-results">
+   {{range .Results.PeopleMatches}}
+   <div>
+      <i class="icon icon-person"></i>
+      {{.Name}}
+   </div>
+   {{end}}
+</section>
+{{end}}
+
+{{if len .Results.FolderMatches}}
+<h2>Folder Matches</h2>
+
+<section class="folder-search-results">
+   {{range .Results.FolderMatches}}
+   <div>
+      <a hx-get="/?root={{.RelativePath $.LibraryPath}}" hx-push-url="true" hx-target="#mainContent">
+         <i class="icon icon-folder"></i>
+         {{.RelativePath $.LibraryPath}}
+      </a>
+   </div>
+   {{end}}
+</section>
+{{end}}
+
+<script>
+   window.root = "{{.Root}}";
+</script>
+
+{{end}}

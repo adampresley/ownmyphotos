@@ -37,6 +37,14 @@
             </li>
          </ul>
          <ul>
+            <li>
+               <form hx-post="/search/simple" hx-push-url="true" hx-target="#mainContent">
+                  <input type="search" id="globalSearch" name="term" />
+                  {{if isSet "Root" .}}
+                  <input type="hidden" name="root" id="root" value="{{.Root}}" />
+                  {{end}}
+               </form>
+            </li>
             <li><a hx-get="/about" hx-push-url="true" hx-target="#mainContent">About</a></li>
             <li><a hx-get="/settings" hx-push-url="true" hx-target="#mainContent">Settings</a></li>
          </ul>
@@ -53,6 +61,7 @@
    </footer>
 
    <script type="module" src="/static/js/spinner-middleware.js"></script>
+   <script type="module" src="/static/js/pages/layout.js"></script>
    {{javascriptIncludes "JavascriptIncludes" .}}
 </body>
 

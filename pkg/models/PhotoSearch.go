@@ -3,6 +3,6 @@ package models
 type PhotoSearch struct {
 	Keywords   []string
 	Page       int
-	People     []int
+	People     []string
 	SearchTerm string
 }
