@@ -356,7 +356,7 @@ SELECT
 FROM photos p
 WHERE p.deleted_at IS NULL
 AND p.full_path = ?
-ORDER BY p.creation_date_time DESC
+ORDER BY p.file_name ASC
 `
 
 	ctx, cancel := DBContext()
