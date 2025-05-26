@@ -28,12 +28,12 @@
    <script src="/static/js/htmx.min.js"></script>
 </head>
 
-<body>
+<body class="parent">
    <header class="grid top-header">
       <nav>
          <ul>
             <li>
-               <h1><a href="/">Own My Photos</a></h1>
+               <h1><a href="/"><img src="/static/images/logo.png" alt="Own My Photos" /></a></h1>
             </li>
          </ul>
          <ul>
@@ -52,8 +52,15 @@
    </header>
    <!-- END NAV -->
 
-   <main id="mainContent" class="container-fluid">
-      {{template "content" .}}
+   <main class="main">
+      <aside class="sidebar">
+         {{template "components/sidebar-nav" .}}
+      </aside>
+
+      <div id="mainContent">
+         {{template "content" .}}
+      </div>
+      </div>
    </main>
 
    <footer id="page-footer">

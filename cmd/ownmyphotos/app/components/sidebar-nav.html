@@ -1,0 +1,25 @@
+{{define "components/sidebar-nav"}}
+<nav class="folder-tree">
+   {{template "folder-children" .Folders}}
+</nav>
+{{end}}
+
+{{define "folder-children"}}
+{{if .Children}}
+<ul>
+   {{range .Children}}
+   <li{{if len .Children}} class="has-children" {{end}}>
+      <a hx-get="/?root={{.Path}}" hx-push-url="true" hx-target="#mainContent">
+         <i class="icon icon-folder"></i> {{.FolderName}}
+      </a>
+      {{if .Children}}
+      <!-- <button class="toggle-btn" onclick="toggleFolder(this)" aria-label="Toggle folder"> -->
+      <!--    <i class="icon {{if .IsOpen}}icon-chevron-down{{else}}icon-chevron-right{{end}}"></i> -->
+      <!-- </button> -->
+      {{template "folder-children" .}}
+      {{end}}
+      </li>
+      {{end}}
+</ul>
+{{end}}
+{{end}}

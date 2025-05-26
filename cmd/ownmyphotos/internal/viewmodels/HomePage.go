@@ -9,9 +9,10 @@ import (
 
 type Home struct {
 	BaseViewModel
-	Images []ImageModel
-	Root   string
-	Parent string
+	Images  []ImageModel
+	Root    string
+	Parent  string
+	Folders *models.FolderNode
 }
 
 type ImageModel struct {

@@ -1,8 +1,10 @@
 package home
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -107,6 +109,17 @@ func (c HomeController) HomePage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if folders, err = c.folderService.All(); err != nil {
+		slog.Error("error getting folders", "error", err, "root", cleanRoot)
+		viewData.Message = "There was an error retrieving folders"
+		viewData.IsError = true
+
+		c.renderer.Render(pageName, viewData, w)
+		return
+	}
+
+	viewData.Folders = BuildFolderTree(settings.LibraryPath, folders, cleanRoot)
+	fmt.Printf("\n\nFOLDERS:\n%s\n\n", viewData.Folders.String())
 	/*
 	 * Get photos for this path.
 	 */
@@ -190,4 +203,59 @@ func (c HomeController) AboutPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c.renderer.Render(pageName, viewData, w)
+}
+
+// BuildFolderTree builds a hierarchical folder structure
+func BuildFolderTree(libraryPath string, folders []*models.Folder, currentPath string) *models.FolderNode {
+	// Create a map of paths to folder nodes
+	folderMap := make(map[string]*models.FolderNode)
+
+	// Create root node
+	root := &models.FolderNode{
+		FullPath:   "",
+		FolderName: "Photos",
+		ParentPath: "",
+		IsOpen:     currentPath == "",
+		Children:   []*models.FolderNode{},
+	}
+
+	folderMap[""] = root
+
+	// First pass: create all folder nodes
+	for _, folder := range folders {
+		p := strings.TrimPrefix(strings.TrimPrefix(folder.FullPath, libraryPath), string(os.PathSeparator))
+		pp := filepath.Join(libraryPath, folder.ParentPath)
+
+		node := &models.FolderNode{
+			FullPath:   folder.FullPath,
+			Path:       p,
+			FolderName: folder.FolderName,
+			ParentPath: pp,
+			IsOpen:     strings.HasPrefix(currentPath, folder.FullPath),
+			Children:   []*models.FolderNode{},
+		}
+
+		folderMap[folder.FullPath] = node
+	}
+
+	// Second pass: build the tree structure
+	for _, folder := range folders {
+		node := folderMap[folder.FullPath]
+		parentPath := filepath.Join(libraryPath, folder.ParentPath)
+
+		if folder.ParentPath == "" {
+			parentPath = ""
+		}
+
+		parent, exists := folderMap[parentPath]
+
+		if exists {
+			parent.Children = append(parent.Children, node)
+		} else {
+			// If parent doesn't exist yet, add to root
+			root.Children = append(root.Children, node)
+		}
+	}
+
+	return root
 }

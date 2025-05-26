@@ -11,6 +11,11 @@ import (
 
 type FolderServicer interface {
 	/*
+	 * Retrieve all folders from the database.
+	 */
+	All() ([]*models.Folder, error)
+
+	/*
 	 * Delete a folder by its full path.
 	 */
 	Delete(folder *models.Folder) error
@@ -35,6 +40,24 @@ func NewFolderService(config FolderServiceConfig) FolderService {
 	return FolderService{
 		db: config.DB,
 	}
+}
+
+func (s FolderService) All() ([]*models.Folder, error) {
+	var (
+		err     error
+		results []*models.Folder
+	)
+
+	statement := `SELECT * FROM folders WHERE folder_name IS NOT NULL ORDER BY full_path`
+
+	ctx, cancel := DBContext()
+	defer cancel()
+
+	if err = s.db.Query(ctx, &results, statement); err != nil {
+		return results, fmt.Errorf("error retrieving folders: %w", err)
+	}
+
+	return results, nil
 }
 
 func (s FolderService) Delete(folder *models.Folder) error {

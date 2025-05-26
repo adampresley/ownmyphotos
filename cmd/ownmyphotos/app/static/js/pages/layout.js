@@ -1,3 +1,22 @@
+function toggleFolder(button) {
+   const folderItem = button.closest('.folder-item');
+   const subfolderList = folderItem.querySelector('.subfolder-list');
+
+   if (subfolderList) {
+      subfolderList.classList.toggle('open');
+
+      // Toggle the icon
+      const icon = button.querySelector('.icon');
+      if (icon.classList.contains('icon-chevron-right')) {
+         icon.classList.remove('icon-chevron-right');
+         icon.classList.add('icon-chevron-down');
+      } else {
+         icon.classList.remove('icon-chevron-down');
+         icon.classList.add('icon-chevron-right');
+      }
+   }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
    const searchInput = document.querySelector("#globalSearch");
 
