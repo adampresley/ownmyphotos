@@ -53,6 +53,7 @@ main {
    padding: 0;
    padding-block: 0;
    grid-row-start: 2;
+   grid-gap: 0.5rem;
    display: grid;
    grid-template-columns: 1fr 3fr;
    overflow: hidden;

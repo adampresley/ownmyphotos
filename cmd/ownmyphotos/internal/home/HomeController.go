@@ -1,7 +1,6 @@
 package home
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -119,7 +118,7 @@ func (c HomeController) HomePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	viewData.Folders = BuildFolderTree(settings.LibraryPath, folders, cleanRoot)
-	fmt.Printf("\n\nFOLDERS:\n%s\n\n", viewData.Folders.String())
+
 	/*
 	 * Get photos for this path.
 	 */

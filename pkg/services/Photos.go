@@ -403,8 +403,8 @@ func (s PhotoService) Save(photo *models.Photo) error {
 		args := []any{keyword.Keyword, keyword.Keyword}
 
 		if _, err = tx.Exec(ctx, statement, args...); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("error inserting keyword %s: %w", keyword.Keyword, err)
+			err2 := tx.Rollback()
+			return fmt.Errorf("error inserting keyword %s: %w (%s)", keyword.Keyword, err, err2.Error())
 		}
 	}
 
@@ -416,8 +416,8 @@ func (s PhotoService) Save(photo *models.Photo) error {
 		args := []any{person.Name}
 
 		if err = tx.QueryRow(ctx, &personID, statement, args); err != nil && !sqlz.IsNotFound(err) {
-			_ = tx.Rollback()
-			return fmt.Errorf("error querying for person %s: %w", person.Name, err)
+			err2 := tx.Rollback()
+			return fmt.Errorf("error querying for person %s: %w (%s)", person.Name, err, err2.Error())
 		}
 
 		if sqlz.IsNotFound(err) {
@@ -436,8 +436,8 @@ func (s PhotoService) Save(photo *models.Photo) error {
 			args := []any{time.Now().UTC(), time.Now().UTC(), person.Name, time.Now().UTC()}
 
 			if r, err = tx.Exec(ctx, statement, args...); err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("error inserting person %s: %w", person.Name, err)
+				err2 := tx.Rollback()
+				return fmt.Errorf("error inserting person %s: %w (%s)", person.Name, err, err2.Error())
 			}
 
 			personID, _ = r.LastInsertId()
@@ -538,8 +538,8 @@ func (s PhotoService) Save(photo *models.Photo) error {
 	}
 
 	if _, err = tx.Exec(ctx, statement, args...); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("error inserting photo: %w", err)
+		err2 := tx.Rollback()
+		return fmt.Errorf("error inserting photo: %w (%s)", err, err2.Error())
 	}
 
 	/*
@@ -549,23 +549,23 @@ func (s PhotoService) Save(photo *models.Photo) error {
 	statement = `DELETE FROM photos_people WHERE photo_id=?;`
 
 	if _, err = tx.Exec(ctx, statement, photo.ID); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("error deleting people associations from photo: %w", err)
+		err2 := tx.Rollback()
+		return fmt.Errorf("error deleting people associations from photo: %w (%s)", err, err2.Error())
 	}
 
 	statement = `DELETE FROM photos_keywords WHERE photo_id=?;`
 
 	if _, err = tx.Exec(ctx, statement, photo.ID); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("error deleting keyword associations from photo: %w", err)
+		err2 := tx.Rollback()
+		return fmt.Errorf("error deleting keyword associations from photo: %w (%s)", err, err2.Error())
 	}
 
 	for _, person := range photo.People {
 		statement = `INSERT INTO photos_people (photo_id, person_id) VALUES (?,?);`
 
 		if _, err = tx.Exec(ctx, statement, photo.ID, person.ID); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("error inserting person associations to photo: %w", err)
+			err2 := tx.Rollback()
+			return fmt.Errorf("error inserting person associations to photo: %w (%s)", err, err2.Error())
 		}
 	}
 
@@ -573,16 +573,16 @@ func (s PhotoService) Save(photo *models.Photo) error {
 		statement = `INSERT INTO photos_keywords (photo_id, keyword) VALUES (?,?)`
 
 		if _, err = tx.Exec(ctx, statement, photo.ID, keyword.Keyword); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("error inserting keyword associations to photo: %w", err)
+			err2 := tx.Rollback()
+			return fmt.Errorf("error inserting keyword associations to photo: %w (%s)", err, err2.Error())
 		}
 	}
 
 	/*
 	 * Finally! Commit the transaction.
 	 */
-	_ = tx.Commit()
-	return nil
+	err = tx.Commit()
+	return err
 }
 
 func (s PhotoService) Search(criteria models.PhotoSearch) (models.SearchPhotosResult, error) {

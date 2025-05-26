@@ -261,7 +261,8 @@ func (c *JpegCollector) syncPhotos(settings *models.Settings, allPhotos []*model
 			 * us determine if we need to create a new record, or update an existing one.
 			 */
 			existingPhoto := slices.Find(allPhotos, func(p *models.Photo) bool {
-				if p.FileName == fileName && p.Ext == ext {
+				fullPath := filepath.Join(settings.LibraryPath, albumPath)
+				if p.FileName == fileName && p.Ext == ext && p.FullPath == fullPath {
 					return true
 				}
 
@@ -299,9 +300,10 @@ func (c *JpegCollector) syncPhotos(settings *models.Settings, allPhotos []*model
 					action = "updating"
 				}
 
-				slog.Info(action+" photo", "path", fullImagePath)
+				slog.Info(action+" photo", "path", fullImagePath, "fileID", fileID, "metadataHash", filePhoto.MetadataHash, "existingID", existingPhoto.ID, "existingHash", existingPhoto.MetadataHash)
 
 				if err = c.photoService.Save(filePhoto); err != nil {
+					slog.Error("error saving photo", "error", err, "filename", fileName, "ext", ext)
 					errs = append(errs, fmt.Errorf("could not save photo '%s': %w", fileName, err))
 					return errs
 				}

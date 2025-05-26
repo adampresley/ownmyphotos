@@ -16,26 +16,6 @@
    {{end}}
 </section>
 
-<section class="folders">
-   {{if not (eq .Parent "root")}}
-   <div class="folder">
-      <a hx-get="/?root={{.Parent}}" hx-push-url="true" hx-target="#mainContent">
-         <i class="icon icon-folder-arrow-up"></i> ..
-      </a>
-   </div>
-   {{end}}
-
-   {{range .Images}}
-   {{if .IsDirectory}}
-   <div class="folder">
-      <a hx-get="/?root={{.RelativePath}}" hx-push-url="true" hx-target="#mainContent">
-         <i class="icon icon-folder"></i> {{.Name}}
-      </a>
-   </div>
-   {{end}}
-   {{end}}
-</section>
-
 <section class="gallery">
    {{range .Images}}
    {{if not .IsDirectory}}

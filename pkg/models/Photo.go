@@ -114,6 +114,7 @@ func (p *Photo) GenerateMetadataHash() string {
 	sort.Strings(keywords)
 	sort.Strings(people)
 
+	s.WriteString(p.FullPath + "_")
 	s.WriteString(p.FileName + "_")
 	s.WriteString(p.LensMake + "_")
 	s.WriteString(p.LensModel + "_")
@@ -148,10 +149,11 @@ func (p *Photo) String() string {
 	sort.Strings(keywords)
 	sort.Strings(people)
 
-	r.WriteString("Photo '" + p.FileName + "'\n")
+	r.WriteString("Photo (" + p.ID + ") '" + p.FileName + "'\n")
 	r.WriteString("  Path: " + p.FullPath + "\n")
 	r.WriteString("  Title: " + p.Title + "\n")
 	r.WriteString("  Caption: " + p.Caption + "\n")
+	r.WriteString("  Metadata Hash: " + p.MetadataHash + "\n")
 	r.WriteString("  Lens:\n")
 	r.WriteString("    Make: " + p.LensMake + "\n")
 	r.WriteString("    Model: " + p.LensModel + "\n")
